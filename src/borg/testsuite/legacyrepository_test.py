@@ -13,9 +13,9 @@ from ..helpers import IntegrityError
 from ..helpers import msgpack
 from ..fslocking import Lock, LockFailed
 from ..platformflags import is_win32
-from ..legacyremote import LegacyRemoteRepository, InvalidRPCMethod, PathNotAllowed
-from ..legacyrepository import LegacyRepository, LoggedIO
-from ..legacyrepository import MAGIC, MAX_DATA_SIZE, TAG_DELETE, TAG_PUT2, TAG_PUT, TAG_COMMIT
+from ..legacy.remote import LegacyRemoteRepository, InvalidRPCMethod, PathNotAllowed
+from ..legacy.repository import LegacyRepository, LoggedIO
+from ..legacy.repository import MAGIC, MAX_DATA_SIZE, TAG_DELETE, TAG_PUT2, TAG_PUT, TAG_COMMIT
 from ..repoobj import RepoObj
 from .hashindex_test import H
 
