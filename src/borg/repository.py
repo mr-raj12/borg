@@ -372,7 +372,6 @@ class Repository:
         # is using this object, but we assume that this is the case.
         # As we don't do garbage collection here, this is not a problem.
         # We also don't know the plaintext size, so we set it to 0.
-        init_entry = ChunkIndexEntry(flags=ChunkIndex.F_USED, size=0)
         infos = self.store.list("packs")
         try:
             for info in infos:
@@ -411,7 +410,9 @@ class Repository:
                     # borg check --repair: the index will only have non-corrupted objects.
                     pack_id = hex_to_bin(info.name)
                     chunk_id = pack_id  # N=1: chunk_id == pack_id
-                    chunks[chunk_id] = init_entry
+                    chunks[chunk_id] = ChunkIndexEntry(
+                        flags=ChunkIndex.F_USED, size=0, pack_id=pack_id, pack_offset=0, pack_size=0
+                    )
                 now = time.monotonic()
                 if now > t_last_checkpoint + 300:  # checkpoint every 5 mins
                     t_last_checkpoint = now

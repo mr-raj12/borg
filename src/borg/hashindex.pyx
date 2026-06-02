@@ -34,9 +34,9 @@ class HTProxyMixin:
         self.ht.clear()
 
 
-ChunkIndexEntry = namedtuple('ChunkIndexEntry', 'flags size')
-ChunkIndexEntryFormatT = namedtuple('ChunkIndexEntryFormatT', 'flags size')
-ChunkIndexEntryFormat = ChunkIndexEntryFormatT(flags="I", size="I")
+ChunkIndexEntry = namedtuple('ChunkIndexEntry', 'flags size pack_id pack_offset pack_size')
+ChunkIndexEntryFormatT = namedtuple('ChunkIndexEntryFormatT', 'flags size pack_id pack_offset pack_size')
+ChunkIndexEntryFormat = ChunkIndexEntryFormatT(flags="I", size="I", pack_id="32s", pack_offset="Q", pack_size="I")
 
 
 class ChunkIndex(HTProxyMixin, MutableMapping):
@@ -59,8 +59,9 @@ class ChunkIndex(HTProxyMixin, MutableMapping):
         else:
             if usable is not None:
                 capacity = usable * 2  # load factor 0.5
-            self.ht = HashTableNT(key_size=32, value_type=ChunkIndexEntry, value_format=ChunkIndexEntryFormat,
-                                  capacity=capacity)
+            self.ht = HashTableNT(
+                key_size=32, value_type=ChunkIndexEntry, value_format=ChunkIndexEntryFormat, capacity=capacity
+            )
 
     def hide_system_flags(self, value):
         user_flags = value.flags & self.M_USER
@@ -79,7 +80,7 @@ class ChunkIndex(HTProxyMixin, MutableMapping):
         else:
             flags = v.flags | self.F_USED
             assert v.size == 0 or v.size == size
-        self[key] = ChunkIndexEntry(flags=flags, size=size)
+        self[key] = ChunkIndexEntry(flags=flags, size=size, pack_id=key, pack_offset=0, pack_size=0)
 
     def __getitem__(self, key):
         """Specialized __getitem__ that hides system flags."""

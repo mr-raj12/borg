@@ -58,7 +58,9 @@ class ArchiveGarbageCollector:
                 # we do not know yet whether it is actually referenced from some archives.
                 # we "abuse" the size field here. usually there is the plaintext size,
                 # but we use it for the size of the stored object here.
-                chunks[id] = ChunkIndexEntry(flags=ChunkIndex.F_NONE, size=stored_size)
+                chunks[id] = ChunkIndexEntry(
+                    flags=ChunkIndex.F_NONE, size=stored_size, pack_id=id, pack_offset=0, pack_size=stored_size
+                )
         else:  # faster: rely on existing chunks index (with flags F_NONE and size 0).
             logger.info("Getting object IDs from cached chunks index...")
             chunks = build_chunkindex_from_repo(self.repository, cache_immediately=True)
