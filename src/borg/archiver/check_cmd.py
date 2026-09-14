@@ -3,14 +3,32 @@ import os
 from ._common import with_repository, Highlander
 from ..archive import ArchiveChecker
 from ..constants import *  # NOQA
+from ..crypto.key import key_from_repository, KeyfileInvalidError, RepoKeyNotFoundError, UnsupportedKeyFormatError
 from ..helpers import set_ec, EXIT_WARNING, CancelledByUser, CommandError, Error, IntegrityError
 from ..helpers import relative_time_marker_validator, yes, ArchiveFormatter, sig_int
 from ..helpers.argparsing import ArgumentParser
 from ..helpers.time import archive_ts_now, calculate_relative_offset
+from ..repoobj import RepoObj, object_validator
 
 from ..logger import create_logger
 
 logger = create_logger()
+
+
+def manifest_key(repository):
+    """Return the key of repository, identified by the manifest, or None if it can not be read.
+
+    None if the manifest does not identify the key type (IntegrityError), no key is found
+    (RepoKeyNotFoundError), or the key is invalid (KeyfileInvalidError, UnsupportedKeyFormatError);
+    a warning is logged then. Other errors, e.g. a wrong passphrase, propagate.
+    """
+    try:
+        # ids=(): read no chunk objects. key_from_repository finds them through the chunk index, which
+        # may be corrupt here.
+        return key_from_repository(repository, ())
+    except (IntegrityError, RepoKeyNotFoundError, KeyfileInvalidError, UnsupportedKeyFormatError) as err:
+        logger.warning(f"Could not read the key, the index rebuild will not validate object headers: {err}")
+        return None
 
 
 class CheckMixIn:
@@ -78,8 +96,18 @@ class CheckMixIn:
             # the repository check has finished, which can take hours.
             ArchiveFormatter.validate_format(format)
         if not args.archives_only:
+            # only a repair rebuilds the index, so validate, and the key to make it, are needed only then.
+            validate = None
+            if args.repair:
+                key = archive_checker.key if not args.repo_only else manifest_key(repository)
+                if key is not None:
+                    validate = object_validator(RepoObj(key))
             if not repository.check(
-                repair=args.repair, max_duration=args.max_duration, max_age=max_age, repo_only=args.repo_only
+                repair=args.repair,
+                max_duration=args.max_duration,
+                max_age=max_age,
+                repo_only=args.repo_only,
+                validate=validate,
             ):
                 set_ec(EXIT_WARNING)
             if sig_int:  # repository check interrupted; skip the archive check
@@ -247,7 +275,11 @@ class CheckMixIn:
            index from the packs if the index is corrupt, provided every pack is intact. If
            any pack is corrupt, the repository check leaves the index and the packs untouched
            and reports the corruption; salvaging a corrupt pack's still-intact objects is not
-           implemented yet (refs #8572).
+           implemented yet (refs #8572). The rebuild decrypts each object's metadata with the
+           key, which verifies the object's header, and does not index an object that fails
+           this; such objects are reported as errors. ``--repository-only --repair`` therefore
+           asks for the passphrase. If the key can not be read, the rebuild indexes the objects
+           without this verification.
 
         2. When checking the consistency and correctness of archives, repair mode might
            remove whole archives from the manifest if their archive metadata chunk is

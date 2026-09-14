@@ -1,4 +1,5 @@
 from datetime import datetime, timezone, timedelta
+from hashlib import sha256
 from pathlib import Path
 import re
 import shutil
@@ -9,6 +10,7 @@ import pytest
 
 from ... import archive as archive_module
 from ...archive import ArchiveChecker, ChunkBuffer
+from ...archiver import check_cmd as check_cmd_module
 from ...cache import delete_chunkindex_from_repo
 from ...constants import *  # NOQA
 from ...helpers import bin_to_hex, msgpack, CommandError, CorruptPack, Error, IntegrityError, sig_int
@@ -627,6 +629,61 @@ def test_check_repair_rebuilds_corrupt_index(archivers, request):
             assert repository.store.hash(f"index/{info.name}") == info.name
     cmd(archiver, "check", exit_code=0)  # the repository is consistent again
     assert "archive1" in cmd(archiver, "repo-list")  # and remains usable
+
+
+def tamper_object_keeping_pack_name(repository):
+    """Flip a byte in the metadata slot of the 2nd object of a pack holding more than 2 objects, and store
+    the pack under the sha256 of its new content, so its content still matches its name. Corrupt every
+    index fragment. Return the id of the changed object.
+    """
+    by_pack = {}
+    for chunk_id, entry in repository.chunks.iteritems():
+        by_pack.setdefault(entry.pack_id, []).append((entry.obj_offset, chunk_id))
+    pack_id, objects = next((p, sorted(o)) for p, o in by_pack.items() if len(o) > 2)
+    offset, tampered_id = objects[1]
+    old_name = "packs/" + bin_to_hex(pack_id)
+    data = corrupt(repository.store_load(old_name), offset + RepoObj.obj_header.size)
+    repository.store_store("packs/" + sha256(data).hexdigest(), data)
+    repository.store_delete(old_name)
+    for info in repository.store_list("index"):
+        name = f"index/{info.name}"
+        repository.store_store(name, corrupt(repository.store_load(name), 0))
+    return tampered_id
+
+
+def test_check_repository_only_repair_validates_index_rebuild(archivers, request):
+    """--repository-only --repair does not index an object whose metadata slot fails validation (#9901)."""
+    archiver = request.getfixturevalue(archivers)
+    if archiver.get_kind() != "local":
+        pytest.skip("inspects the store directly")
+    check_cmd_setup(archiver)
+    with Repository(archiver.repository_location, exclusive=True) as repository:
+        tampered_id = tamper_object_keeping_pack_name(repository)
+    output = cmd(archiver, "check", "-v", "--repository-only", "--repair", exit_code=1)
+    assert "does not authenticate" in output
+    assert "index rebuilt without objects that failed validation" in output
+    with Repository(archiver.repository_location) as repository:
+        assert tampered_id not in repository.chunks
+
+
+def test_check_repository_only_repair_without_key(archivers, request, monkeypatch):
+    """Without a readable key, --repository-only --repair warns and indexes every object whose header parses."""
+    archiver = request.getfixturevalue(archivers)
+    if archiver.get_kind() != "local":
+        pytest.skip("patches in-process archiver internals")
+    check_cmd_setup(archiver)
+    with Repository(archiver.repository_location, exclusive=True) as repository:
+        tampered_id = tamper_object_keeping_pack_name(repository)
+
+    def key_from_repository(repository, ids=None):
+        raise IntegrityError("no key")
+
+    monkeypatch.setattr(check_cmd_module, "key_from_repository", key_from_repository)
+    output = cmd(archiver, "check", "-v", "--repository-only", "--repair", exit_code=0)
+    assert "the index rebuild will not validate object headers" in output
+    assert "has been rebuilt from the packs" in output
+    with Repository(archiver.repository_location) as repository:
+        assert tampered_id in repository.chunks
 
 
 @pytest.mark.skip(reason="TODO: repair does not yet rewrite store-corrupted packs, refs #8572")

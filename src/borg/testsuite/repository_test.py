@@ -1128,6 +1128,41 @@ def test_check_repair_rebuilds_corrupt_index(tmp_path):
             assert pdchunk(repository.get(cid)) == bytes([i]) * 20  # every chunk is indexed and resolves
 
 
+@pytest.mark.parametrize("repo_only", [True, False])
+def test_check_repair_rebuild_validates_objects(tmp_path, caplog, repo_only):
+    # check(repair=True, validate=...) does not index an object validate rejects and reports it, refs
+    # #9901. That fails a repository-only run only.
+    location = os.fspath(tmp_path / "repo")
+    ids = [H(x) for x in range(10)]
+    rejected_id = ids[4]
+    with Repository(location, exclusive=True, create=True) as repository:
+        for i, cid in enumerate(ids):
+            repository.put(cid, fchunk(bytes([i]) * 20, chunk_id=cid))
+        repository.flush()
+    with reopen(repository) as repository:
+        for info in repository.store_list("index"):  # corrupt every index fragment
+            name = f"index/{info.name}"
+            data = bytearray(repository.store_load(name))
+            data[0] ^= 0xFF
+            repository.store_store(name, bytes(data))
+    validated = []
+
+    def validate(chunk_id, obj):
+        validated.append(chunk_id)
+        return chunk_id != rejected_id
+
+    caplog.set_level(logging.INFO)
+    with reopen(repository) as repository:
+        assert repository.check(repair=True, repo_only=repo_only, validate=validate) is not repo_only
+    assert set(ids) <= set(validated)
+    assert "skipped 1 pack byte range(s) holding objects that failed validation" in caplog.text
+    with reopen(repository) as repository:
+        assert rejected_id not in repository.chunks
+        for i, cid in enumerate(ids):
+            if cid != rejected_id:
+                assert pdchunk(repository.get(cid)) == bytes([i]) * 20  # every other object is indexed
+
+
 def test_check_repair_refuses_when_pack_corrupt(tmp_path):
     # A repair that finds any corrupt pack leaves the index and the pack untouched (no lossy rebuild,
     # nothing dropped) and fails on a repository-only run, refs #8572, #10026.
